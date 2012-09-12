@@ -1,0 +1,88 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+my $max_arg_length = int(int(`getconf ARG_MAX`) * 0.9);
+    
+sub help {
+    print "Usage: sync-git-from-svn [ SVNDIR | --all ]";
+    exit 1;
+}
+
+sub svntracked {
+    my ($svndir) = @_;
+    my $svnresult = `svn status --verbose "$svndir"`;
+    my @lines = split(/\n/, $svnresult);
+    my @files = ();
+    for my $line (@lines) {
+        my $status = substr($line, 0, 1);
+        if (index(' MD', $status) != -1) {
+            my @splitted = split(/\s+/, $line);
+            if ($status eq ' ') {
+                $line = @splitted[4..$#splitted];
+            } else {
+                $line = @splitted[3..$#splitted];
+            }
+            push(@files, $line);
+        }
+    }
+    return @files;
+}
+
+sub runcommand
+{
+    my ($command) = @_;
+    #print $command, "\n";
+    `$command`;
+}
+
+sub gitadd {
+    my ($svndir) = @_;
+    $svndir =~ s/\/$//;
+    my @files = svntracked($svndir);
+    my $gitaddcmd = 'git add';
+    my $pendingadd = 0;
+    for my $file (@files) {
+        if (-f $file)
+        {
+            if (length($gitaddcmd) + length($file) + 3 < $max_arg_length) {
+                $gitaddcmd .= ' "' . $file . '"';
+                $pendingadd = 1;
+            } else {
+                runcommand $gitaddcmd;
+                $gitaddcmd = 'git add';
+            }
+        }
+    }
+    if ($pendingadd) {
+        runcommand $gitaddcmd;
+    }
+}
+
+sub main {
+    if (scalar(@ARGV) < 1) {
+        help;
+    }
+    
+    my @svndirs = ();
+    if ($ARGV[0] eq "--all") {
+        if (-e ".svndirs") {
+            open(FILE, ".svndirs") or die("Cannot open file .svndirs");
+            @svndirs = <FILE>;
+            chomp @svndirs;
+            @svndirs = grep(/\S/, @svndirs);
+        } else {
+            print "File .svndirs does not exist.";
+            exit 1;
+        }
+    } else {
+        @svndirs = @ARGV;
+    }
+
+    for my $svndir (@svndirs) {
+        gitadd $svndir;
+    }
+}
+
+main;

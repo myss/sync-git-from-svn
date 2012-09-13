@@ -17,14 +17,16 @@ sub svntracked {
     my @files = ();
     for my $line (@lines) {
         my $status = substr($line, 0, 1);
-        if (index(' MD', $status) != -1) {
-            my @splitted = split(/\s+/, $line);
-            if ($status eq ' ') {
-                $line = @splitted[4..$#splitted];
-            } else {
-                $line = @splitted[3..$#splitted];
-            }
+        $line = substr($line, 7); # skip status fields
+        if ($status eq ' ') {
+            my @splitted = split(/\s+/, $line, 5);
+            $line = $splitted[4];
             push(@files, $line);
+        } elsif (index('I?', $status) == -1) {
+            my $fieldindex = ($status eq 'A') ? 1 : 4;
+            my @splitted = split(/\s+/, $line, $fieldindex+1);
+            $line = $splitted[$fieldindex];
+            print "Warning: file with status '${status}' is not added: '${line}'\n";
         }
     }
     return @files;
@@ -33,7 +35,7 @@ sub svntracked {
 sub runcommand
 {
     my ($command) = @_;
-    #print $command, "\n";
+    #print "\n", $command, "\n";
     `$command`;
 }
 

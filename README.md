@@ -1,7 +1,7 @@
 sync-git-from-svn
 =================
 
-Perl script that git-adds files tracked by svn to git.
+Perl script that git-adds svn-tracked files to git.
 
 I use this script to hold all my svn checkouts needed for some project in one local git repository, and hold svn checkouts in sync (please inform me if git-svn can do this for multiple svn repositories).
 
@@ -38,7 +38,7 @@ $ git commit -m "Synchronized with svn."
 $ 
 $ # Merge changes to feature branch.
 $ git checkout feature
-$ git merge master
+$ git rebase master
 $ 
 $ # Merge feature branch to master.
 $ git checkout master

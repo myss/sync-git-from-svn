@@ -4,17 +4,22 @@ use strict;
 use warnings;
 
 my $max_arg_length = int(int(`getconf ARG_MAX`) * 0.9);
-    
+
 sub help {
-    print("Usage: sync-git-from-svn [ SVNDIR | --all ]");
+    print('Usage: sync-git-from-svn [ SVNDIR | --all ] [--force] [--dry] [--verbose] [--help]');
     exit(1);
 }
 
 sub svntracked {
-    my ($svndir) = @_;
+    my ($svndir, $verbose) = @_;
+    if (! -d $svndir) {
+        print("Warning: directory ${svndir} does not exist.\n");
+        return ((), 1);
+    }
     my $svnresult = `svn status --verbose "$svndir"`;
     my @lines = split(/\n/, $svnresult);
     my @files = ();
+    my $uptodate = 1;
     for my $line (@lines) {
         my $status = substr($line, 0, 1);
         $line = substr($line, 7); # skip status fields
@@ -26,65 +31,127 @@ sub svntracked {
             my $fieldindex = ($status eq 'A') ? 1 : 4;
             my @splitted = split(/\s+/, $line, $fieldindex+1);
             $line = $splitted[$fieldindex];
-            print "Warning: file with status '${status}' is not added: '${line}'\n";
+            $uptodate = 0;
+            print("Warning: file with svn status '${status}' is not up-to-date: '${line}'\n");
         }
     }
-    return @files;
+    return (\@files, $uptodate);
 }
 
-sub runcommand
-{
-    my ($command) = @_;
-    #print("\n", $command, "\n");
-    `$command`;
+sub runcommand {
+    my ($command, $dry, $verbose) = @_;
+    if ($dry) {
+        print("\n", $command, "\n");
+    } else {
+        if ($verbose) {
+            if (length($command) <= 110) {
+                print("[verbose] ", $command, "\n");
+            } else {
+                print("[verbose] ", substr($command, 0, 107), "...\n");
+            }
+        }
+        `$command`;
+    }
 }
 
 sub gitadd {
-    my ($svndir) = @_;
-    $svndir =~ s/\/$//;
-    my @files = svntracked($svndir);
-    my $gitaddcmd = 'git add';
+    my ($files_ref, $dry, $verbose) = @_;
+    my @files = @$files_ref;
+    my $gitaddcmd = 'git add -f';
+    my $cmd = $gitaddcmd;
     my $pendingadd = 0;
     for my $file (@files) {
-        if (-f $file)
-        {
-            if (length($gitaddcmd) + length($file) + 3 < $max_arg_length) {
-                $gitaddcmd .= ' "' . $file . '"';
+        if (-f $file) {
+            if (length($cmd) + length($file) + 3 < $max_arg_length) {
+                $cmd .= ' "' . $file . '"';
                 $pendingadd = 1;
             } else {
-                runcommand($gitaddcmd);
-                $gitaddcmd = 'git add';
+                runcommand($cmd, $dry, $verbose);
+                $cmd = $gitaddcmd;
+            }
+        } else {
+            if ($verbose && ! -e $file) {
+                print("[verbose] File ${file} does not exist.\n");
             }
         }
     }
     if ($pendingadd) {
-        runcommand($gitaddcmd);
+        runcommand($cmd, $dry, $verbose);
+    }
+}
+
+sub process {
+    my ($svndirs_ref, $dry, $verbose, $force) = @_;
+    my @svndirs = @$svndirs_ref;
+
+    my @all_files = ();
+    my $all_uptodate = 1;
+    for my $svndir (@svndirs) {
+        $svndir =~ s/\/$//;
+        my ($files_ref, $uptodate) = svntracked($svndir, $verbose);
+        my @files = @$files_ref;
+        $all_uptodate &&= $uptodate;
+        push(@all_files, @files);
+    }
+
+    if (!$all_uptodate) {
+        if ($force) {
+            print("Warning: there are files not up-to-date for svn. They will be git-added anyway because of the --force option.\n");
+        } else {
+            print("Error: there are files not up-to-date for svn. Nothing will be done. Use --force option to force git-add.\n");
+        }
+    }
+
+    if ($all_uptodate || $force) {
+        for my $svndir (@svndirs) {
+            runcommand("git add -u '$svndir'", $dry, $verbose); # this will git-add files removed by svn
+        }
+        gitadd(\@all_files, $dry, $verbose);
     }
 }
 
 sub main {
     if (scalar(@ARGV) < 1) {
+        print("Error: no argument given.\n");
         help();
     }
-    
+
+    my $force = 0;
+    my $dry = 0;
+    my $verbose = 0;
     my @svndirs = ();
-    if ($ARGV[0] eq "--all") {
-        if (-e ".svndirs") {
-            open(FILE, ".svndirs") or die("Cannot open file .svndirs");
-            @svndirs = <FILE>;
-            chomp(@svndirs);
-            @svndirs = grep(/\S/, @svndirs);
+
+    for my $arg (@ARGV) {
+        if ($arg eq '--force') {
+            $force = 1;
+        } elsif ($arg eq '--dry') {
+            $dry = 1;
+        } elsif ($arg eq '--verbose') {
+            $verbose = 1;
+        } elsif ($arg eq '--all') {
+            if (-e '.svndirs' && open(FILE, '.svndirs')) {
+                my @dirs = <FILE>;
+                chomp(@dirs);
+                @dirs = grep(/\S/, @dirs);
+                push(@svndirs, @dirs);
+            } else {
+                print("Warning: cannot open file .svndirs\n");
+            }
+        } elsif ($arg eq '--help') {
+            help();
+        } elsif (substr($arg, 0, 1) eq '-') {
+            print("Error: unknown option: ${arg}\n");
+            help();
         } else {
-            print("File .svndirs does not exist.");
-            exit(1);
+            push(@svndirs, $arg);
         }
-    } else {
-        @svndirs = @ARGV;
     }
 
-    for my $svndir (@svndirs) {
-        gitadd($svndir);
+    for my $i (0 .. $#svndirs) {
+        $svndirs[$i] =~ s/\/$//;
     }
+
+    process(\@svndirs, $dry, $verbose, $force);
 }
 
 main();
